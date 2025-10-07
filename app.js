@@ -41,15 +41,29 @@ const appData = {
 };
 
 // Current user (Alex Chen)
-const currentUser = appData.users[0];
+let currentUser = appData.users[0];
+
+// User authentication state
+let isAuthenticated = false;
+let userRole = '';
 
 // Navigation functionality
 function showSection(sectionId) {
+    if (!isAuthenticated) {
+        alert('Please login first');
+        return;
+    }
+
+    if (sectionId === 'admin' && userRole !== 'admin') {
+        alert('Access denied. Admin privileges required.');
+        return;
+    }
+
     // Hide all sections
     document.querySelectorAll('.section').forEach(section => {
         section.classList.remove('active');
     });
-    
+
     // Show selected section
     document.getElementById(sectionId).classList.add('active');
     
@@ -148,6 +162,8 @@ function renderChallenges(filter = 'all') {
         ? appData.challenges 
         : appData.challenges.filter(c => c.type === filter);
     
+    const isAdmin = currentUser.role === 'admin';
+    
     container.innerHTML = filteredChallenges.map(challenge => `
         <div class="challenge-card" data-type="${challenge.type}">
             <div class="challenge-header">
@@ -162,7 +178,14 @@ function renderChallenges(filter = 'all') {
                 <span class="challenge-duration">${challenge.duration}</span>
                 <span class="challenge-participants">${challenge.participants} participants</span>
             </div>
-            <button class="btn btn-primary" onclick="joinChallenge(${challenge.id})">Join Challenge</button>
+            ${isAdmin ? `
+                <div class="admin-actions" data-admin-only>
+                    <button class="btn btn-secondary" onclick="editChallenge(${challenge.id})">Edit</button>
+                    <button class="btn btn-danger" onclick="deleteChallenge(${challenge.id})">Delete</button>
+                </div>
+            ` : `
+                <button class="btn btn-primary" onclick="joinChallenge(${challenge.id})">Join Challenge</button>
+            `}
         </div>
     `).join('');
 }
@@ -507,6 +530,195 @@ function showNotification(message, type = 'info') {
     }, 5000);
 }
 
+// Role-based UI updates
+function updateUIForRole(role) {
+    // Define allowed sections and features per role
+    const roleConfig = {
+        admin: {
+            sections: ['admin', 'users', 'analytics', 'rewards-management'],
+            features: ['createChallenge', 'editChallenge', 'deleteChallenge', 'manageUsers']
+        },
+        student: {
+            sections: ['dashboard', 'challenges', 'leaderboard', 'rewards', 'community', 'profile'],
+            features: ['joinChallenge', 'submitQuiz', 'redeemReward', 'postCommunity']
+        }
+    };
+
+    // Update navigation menu
+    const navMenu = document.querySelector('.nav-menu');
+    const allNavItems = navMenu.querySelectorAll('.nav-link:not(#logout-btn)');
+    
+    allNavItems.forEach(item => {
+        const section = item.getAttribute('data-section');
+        if (roleConfig[role].sections.includes(section)) {
+            item.style.display = 'block';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+
+    // Update page header and menu visibility
+    const headerTitle = document.querySelector('.header-title');
+    const adminMenus = document.querySelectorAll('[data-admin-menu]');
+    const studentMenus = document.querySelectorAll('[data-student-menu]');
+
+    if (headerTitle) {
+        if (role === 'admin') {
+            headerTitle.textContent = 'Admin Dashboard';
+            adminMenus.forEach(menu => menu.style.display = 'block');
+            studentMenus.forEach(menu => menu.style.display = 'none');
+        } else {
+            headerTitle.textContent = 'Student Dashboard';
+            adminMenus.forEach(menu => menu.style.display = 'none');
+            studentMenus.forEach(menu => menu.style.display = 'block');
+        }
+    }
+
+    // Hide/show feature buttons based on role
+    document.querySelectorAll('[data-feature]').forEach(el => {
+        const feature = el.getAttribute('data-feature');
+        if (roleConfig[role].features.includes(feature)) {
+            el.style.display = 'block';
+        } else {
+            el.style.display = 'none';
+            // Remove event listeners for unauthorized features
+            el.replaceWith(el.cloneNode(true));
+        }
+    });
+
+    // Add logout button
+    if (!document.querySelector('#logout-btn')) {
+        const logoutBtn = document.createElement('a');
+        logoutBtn.id = 'logout-btn';
+        logoutBtn.href = '#';
+        logoutBtn.className = 'nav-link';
+        logoutBtn.textContent = 'Logout';
+        logoutBtn.addEventListener('click', handleLogout);
+        navMenu.appendChild(logoutBtn);
+    }
+
+    // Redirect if current section is not allowed
+    const currentSection = document.querySelector('.section.active');
+    if (currentSection && !roleConfig[role].sections.includes(currentSection.id)) {
+        showSection(roleConfig[role].sections[0]);
+    }
+}
+
+// Logout functionality
+function handleLogout(e) {
+    e.preventDefault();
+    
+    // Clear authentication data
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('userData');
+    
+    // Reset current user
+    currentUser = null;
+    
+    // Show login page, hide main content
+    document.getElementById('login-page').style.display = 'flex';
+    document.getElementById('main-content').style.display = 'none';
+    
+    // Clear any sensitive data from the UI
+    document.getElementById('username').value = '';
+    document.getElementById('password').value = '';
+    document.getElementById('login-error').style.display = 'none';
+    
+    showNotification('Logged out successfully', 'info');
+}
+
+// API Helper Functions
+async function apiRequest(endpoint, method = 'GET', body = null) {
+    const token = localStorage.getItem('authToken');
+    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+    
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-User-Role': userData.role || '' // Include role in header for validation
+    };
+
+    const options = {
+        method,
+        headers
+    };
+
+    if (body) {
+        options.body = JSON.stringify(body);
+    }
+
+    try {
+        const response = await fetch(`http://localhost:3000${endpoint}`, options);
+        const data = await response.json();
+
+        if (!response.ok) {
+            if (response.status === 403) {
+                showNotification('You do not have permission to perform this action', 'error');
+                throw new Error('Permission denied');
+            } else if (response.status === 401) {
+                // Session expired or invalid
+                handleLogout({ preventDefault: () => {} });
+                throw new Error('Session expired. Please login again.');
+            }
+            throw new Error(data.message || 'API request failed');
+        }
+
+        return data;
+    } catch (error) {
+        console.error('API request error:', error);
+        showNotification(error.message, 'error');
+        throw error;
+    }
+}
+
+// Login handling
+document.getElementById('login-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const email = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    
+    // Simple authentication (replace with your actual authentication logic)
+    if (email && password) {
+        isAuthenticated = true;
+        userRole = email.includes('admin') ? 'admin' : 'user';
+        document.getElementById('login-page').style.display = 'none';
+        document.querySelector('nav').style.display = 'block';
+        document.querySelector('main').style.display = 'block';
+        
+        // Show/hide admin tab based on role
+        if (userRole !== 'admin') {
+            document.querySelector('a[href="#admin"]').style.display = 'none';
+        }
+    } else {
+        document.getElementById('login-error').style.display = 'block';
+    }
+});
+
+// Navigation link handlers
+document.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', function(e) {
+        e.preventDefault();
+        const section = this.getAttribute('data-section');
+        showSection(section);
+    });
+});
+
+// Challenge Modal functions
+function openNewChallengeModal() {
+    document.getElementById('challengeModal').style.display = 'block';
+}
+
+function closeNewChallengeModal() {
+    document.getElementById('challengeModal').style.display = 'none';
+}
+
+document.getElementById('newChallengeForm')?.addEventListener('submit', function(e) {
+    e.preventDefault();
+    // Add challenge creation logic here
+    alert('Challenge created successfully!');
+    closeNewChallengeModal();
+});
+
 // Initialize the app
 document.addEventListener('DOMContentLoaded', () => {
     // Set up navigation
@@ -536,19 +748,62 @@ document.addEventListener('DOMContentLoaded', () => {
     const validPassword = 'password123';
 
     // Handle login form submission
-    loginForm.addEventListener('submit', (e) => {
+    loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
 
-        const username = document.getElementById('username').value;
+        const email = document.getElementById('username').value;
         const password = document.getElementById('password').value;
 
-        // Validate credentials
-        if (username === validUsername && password === validPassword) {
-            // Hide login page and show main content
-            loginPage.style.display = 'none';
-            mainContent.style.display = 'block';
-        } else {
-            // Show error message
+        // Client-side email validation
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@gmail\.com$/;
+        if (!emailRegex.test(email)) {
+            loginError.textContent = 'Please enter a valid Gmail address';
+            loginError.style.display = 'block';
+            return;
+        }
+
+        try {
+            const response = await fetch('http://localhost:3000/api/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ email, password })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                // Store auth data
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('userData', JSON.stringify(data.user));
+                
+                // Update current user
+                currentUser = data.user;
+                
+                // Hide login page and show main content
+                loginPage.style.display = 'none';
+                mainContent.style.display = 'block';
+                
+                // Initialize appropriate dashboard based on role
+                if (data.user.role === 'admin') {
+                    showSection('admin');
+                } else {
+                    showSection('dashboard');
+                }
+
+                // Update UI based on user role
+                updateUIForRole(data.user.role);
+                
+                // Show welcome message
+                showNotification(`Welcome back, ${data.user.name}! 🌿`, 'success');
+            } else {
+                loginError.textContent = data.message || 'Invalid credentials';
+                loginError.style.display = 'block';
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            loginError.textContent = 'Server error. Please try again later.';
             loginError.style.display = 'block';
         }
     });
@@ -559,6 +814,17 @@ setInterval(() => {
     const activeUsersElement = document.querySelector('.stat-card .stat-content h3');
     if (activeUsersElement && activeUsersElement.textContent !== '2,840') {
         const currentCount = parseInt(activeUsersElement.textContent);
+        if (Math.random() > 0.7) {
+            activeUsersElement.textContent = currentCount + Math.floor(Math.random() * 5 - 2);
+        }
+    }
+}, 30000);
+
+// Export functions for global access
+window.showSection = showSection;
+window.joinChallenge = joinChallenge;
+window.redeemReward = redeemReward;
+window.showNotification = showNotification;
         if (Math.random() > 0.7) {
             activeUsersElement.textContent = currentCount + Math.floor(Math.random() * 5 - 2);
         }

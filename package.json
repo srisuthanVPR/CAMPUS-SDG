@@ -1,0 +1,11 @@
+{
+  "name": "campus-sustainability-dashboard",
+  "version": "1.0.0",
+  "description": "Campus Sustainability Dashboard with Role-Based Access",
+  "main": "server/app.js",
+  "scripts": {
+    "start": "node server/app.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
