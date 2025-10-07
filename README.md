@@ -98,17 +98,15 @@ Project Link: [https://github.com/yourusername/campus-sustainability](https://gi
    ```
    node server/app.js
    ```
-5. Access the application at http://localhost:3000
+5. Access the application at https://campus-kohl-nine.vercel.app/
 
 ## Test Credentials
 
 ### Admin User
-- Email: admin@gmail.com
-- Password: admin123
+- Username: admin
+- Password: password123
 
-### Student User
-- Email: student@gmail.com
-- Password: student123
+
 
 ## API Endpoints
 
